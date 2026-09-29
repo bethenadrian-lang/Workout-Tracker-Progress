@@ -1,5 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { loginUser, registerUser, validateEmail, validatePassword } from '../services/auth';
+import {
+  loginUser,
+  registerUser,
+  validateEmail,
+  validatePassword,
+  demoLogin,
+} from '../services/auth';
 import { AuthSession } from '../types';
 
 interface AuthModalProps {
@@ -45,14 +51,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     e.preventDefault();
     setError(null);
 
-    // Validate email
     const emailVal = validateEmail(email);
     if (!emailVal.valid) {
       setError(emailVal.error || 'Correo electrónico inválido.');
       return;
     }
 
-    // Validate password
     const passVal = validatePassword(password);
     if (!passVal.valid) {
       setError(passVal.error || 'Contraseña inválida.');
@@ -86,7 +90,25 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
       }
     } catch (err: any) {
-      setError(`Ocurrió un error inesperado: ${err.message || 'Error de autenticación'}`);
+      setError(`Ocurrió un error: ${err.message || 'Error de autenticación'}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleQuickDemo = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await demoLogin();
+      if (res.success && res.session) {
+        onSuccess(res.session);
+        onClose();
+      } else {
+        setError(res.error || 'Error al iniciar cuenta demo.');
+      }
+    } catch {
+      setError('Error al iniciar cuenta demo.');
     } finally {
       setLoading(false);
     }
@@ -97,33 +119,33 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="auth-modal-title"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 dark:bg-black/75 backdrop-blur-xs overflow-y-auto"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 dark:bg-black/80 backdrop-blur-xs overflow-y-auto"
       onClick={onClose}
     >
       <div
-        className="card w-full max-w-md p-6 bg-white dark:bg-zinc-900 shadow-2xl relative animate-in fade-in zoom-in-95 duration-150 my-auto"
+        className="card w-full max-w-md p-5 sm:p-6 bg-white dark:bg-zinc-900 shadow-2xl relative my-auto animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Close Button */}
         <button
           type="button"
           onClick={onClose}
-          className="absolute top-4 right-4 text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 text-xl font-bold p-1 leading-none cursor-pointer"
-          aria-label="Cerrar ventana"
+          className="absolute top-3.5 right-3.5 text-slate-400 hover:text-slate-700 dark:hover:text-zinc-200 text-xl font-bold p-1 leading-none cursor-pointer"
+          aria-label="Cerrar"
         >
           ✕
         </button>
 
-        {/* Header & Mode Switcher */}
-        <div className="mb-6 text-center">
-          <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-zinc-800 mb-4">
+        {/* Mode Switcher Tabs */}
+        <div className="mb-5 text-center">
+          <div className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-zinc-800 mb-3 w-full sm:w-auto">
             <button
               type="button"
               onClick={() => {
                 setMode('login');
                 setError(null);
               }}
-              className={`px-4 py-1.5 text-sm font-medium rounded-lg transition cursor-pointer ${
+              className={`flex-1 sm:flex-initial px-4 py-2 text-xs sm:text-sm font-semibold rounded-lg transition cursor-pointer ${
                 mode === 'login'
                   ? 'bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100 shadow-xs'
                   : 'text-slate-500 dark:text-zinc-400 hover:text-slate-800 dark:hover:text-zinc-200'
@@ -137,23 +159,23 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                 setMode('register');
                 setError(null);
               }}
-              className={`px-4 py-1.5 text-sm font-medium rounded-lg transition cursor-pointer ${
+              className={`flex-1 sm:flex-initial px-4 py-2 text-xs sm:text-sm font-semibold rounded-lg transition cursor-pointer ${
                 mode === 'register'
                   ? 'bg-white dark:bg-zinc-900 text-slate-900 dark:text-zinc-100 shadow-xs'
                   : 'text-slate-500 dark:text-zinc-400 hover:text-slate-800 dark:hover:text-zinc-200'
               }`}
             >
-              Crear cuenta
+              Crear cuenta nueva
             </button>
           </div>
 
-          <h2 id="auth-modal-title" className="text-xl font-bold tracking-tight">
-            {mode === 'login' ? 'Bienvenido de nuevo' : 'Crea tu cuenta de entreno'}
+          <h2 id="auth-modal-title" className="text-lg sm:text-xl font-bold tracking-tight">
+            {mode === 'login' ? 'Acceder a tu cuenta' : 'Crear tu cuenta de entreno'}
           </h2>
           <p className="text-xs mut mt-1">
             {mode === 'login'
-              ? 'Accede a tus registros y marcas personales sincronizados.'
-              : 'Tus entrenamientos quedarán guardados de forma segura con cifrado.'}
+              ? 'Tus entrenamientos y récords guardados de forma segura.'
+              : 'Empieza a registrar tus entrenamientos con tu perfil personalizado.'}
           </p>
         </div>
 
@@ -161,15 +183,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         {error && (
           <div
             role="alert"
-            className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs font-medium flex items-start gap-2"
+            className="mb-4 p-3 rounded-lg bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-900/60 text-red-700 dark:text-red-300 text-xs font-medium flex items-start gap-2"
           >
-            <span className="font-bold">⚠️</span>
-            <span>{error}</span>
+            <span className="font-bold text-sm">⚠️</span>
+            <div className="flex-1">
+              <span>{error}</span>
+              {mode === 'login' && error.includes('No se encontró') && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('register');
+                    setError(null);
+                  }}
+                  className="block mt-1 font-bold underline cursor-pointer text-emerald-600 dark:text-emerald-400"
+                >
+                  ¿Quieres crear esta cuenta ahora? Pulsa aquí
+                </button>
+              )}
+            </div>
           </div>
         )}
 
-        {/* Auth Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="space-y-3.5">
           {mode === 'register' && (
             <div>
               <label className="lbl" htmlFor="auth-name">
@@ -211,7 +247,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="text-xs text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                className="text-[11px] text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
               >
                 {showPassword ? 'Ocultar' : 'Mostrar'}
               </button>
@@ -222,15 +258,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               required
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
               className="inp"
-              placeholder={mode === 'register' ? 'Mín. 6 caracteres (letras y números)' : 'Tu contraseña'}
+              placeholder={mode === 'register' ? 'Mínimo 4 caracteres' : 'Tu contraseña'}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            {mode === 'register' && (
-              <p className="text-[11px] mut mt-1">
-                Debe incluir al menos 6 caracteres con letras y números.
-              </p>
-            )}
           </div>
 
           {mode === 'register' && (
@@ -254,29 +285,64 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           <button
             type="submit"
             disabled={loading}
-            className="btn w-full flex items-center justify-center gap-2 cursor-pointer mt-2 disabled:opacity-50"
+            className="btn w-full flex items-center justify-center gap-2 cursor-pointer mt-2 disabled:opacity-50 font-semibold"
           >
             {loading ? (
               <>
                 <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                <span>Procesando…</span>
+                <span>Guardando…</span>
               </>
             ) : mode === 'login' ? (
               'Iniciar sesión'
             ) : (
-              'Crear mi cuenta'
+              'Crear mi cuenta ahora'
             )}
           </button>
         </form>
 
-        <div className="mt-4 pt-4 border-t border-slate-200 dark:border-zinc-800 text-center">
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-xs mut hover:text-slate-800 dark:hover:text-zinc-200 underline cursor-pointer"
-          >
-            Continuar como invitado
-          </button>
+        {/* Switch mode links */}
+        <div className="mt-4 pt-3 border-t border-slate-200 dark:border-zinc-800 text-center space-y-2">
+          {mode === 'login' ? (
+            <p className="text-xs text-slate-600 dark:text-zinc-400">
+              ¿No tienes una cuenta aún?{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('register');
+                  setError(null);
+                }}
+                className="font-bold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+              >
+                Crear cuenta gratis
+              </button>
+            </p>
+          ) : (
+            <p className="text-xs text-slate-600 dark:text-zinc-400">
+              ¿Ya estás registrado?{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setMode('login');
+                  setError(null);
+                }}
+                className="font-bold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+              >
+                Inicia sesión aquí
+              </button>
+            </p>
+          )}
+
+          {/* Quick Demo Button */}
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={handleQuickDemo}
+              disabled={loading}
+              className="text-xs py-1.5 px-3 rounded-lg border border-dashed border-emerald-500/50 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-medium transition cursor-pointer w-full"
+            >
+              ⚡ Probar al instante con cuenta de demostración
+            </button>
+          </div>
         </div>
       </div>
     </div>

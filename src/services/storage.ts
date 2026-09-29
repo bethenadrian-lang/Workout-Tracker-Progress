@@ -1,4 +1,5 @@
 import { WorkoutLog } from '../types';
+import { getActiveSession } from './auth';
 
 const GLOBAL_DEFAULT_KEY = 'wt_v1';
 
@@ -14,19 +15,7 @@ export function loadUserLogs(userId?: string): WorkoutLog[] {
   const key = getUserStorageKey(userId);
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) {
-      // If user has no specific logs yet, check if there are global logs to copy or return empty
-      if (userId) {
-        const guestRaw = localStorage.getItem(GLOBAL_DEFAULT_KEY);
-        if (guestRaw) {
-          const parsed = JSON.parse(guestRaw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed.map((l: any) => ({ ...l, userId }));
-          }
-        }
-      }
-      return [];
-    }
+    if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
     return parsed.map(sanitizeLogItem).filter(Boolean) as WorkoutLog[];
@@ -36,29 +25,67 @@ export function loadUserLogs(userId?: string): WorkoutLog[] {
   }
 }
 
-// Safely save logs with QuotaExceeded error handling
+// Fetch workouts from server for authenticated user
+export async function syncWorkoutsFromServer(userId?: string): Promise<WorkoutLog[] | null> {
+  const session = getActiveSession();
+  if (!session?.token || !userId) return null;
+
+  try {
+    const res = await fetch('/api/workouts', {
+      headers: {
+        Authorization: `Bearer ${session.token}`,
+      },
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (Array.isArray(data.workouts)) {
+      const sanitized = data.workouts.map(sanitizeLogItem).filter(Boolean) as WorkoutLog[];
+      const key = getUserStorageKey(userId);
+      localStorage.setItem(key, JSON.stringify(sanitized));
+      return sanitized;
+    }
+  } catch (e) {
+    console.warn('Could not sync workouts from server, using local cache:', e);
+  }
+  return null;
+}
+
+// Safely save logs to localStorage and synchronize with Server
 export function saveUserLogs(logs: WorkoutLog[], userId?: string): { success: boolean; error?: string } {
   const key = getUserStorageKey(userId);
   try {
     const serialized = JSON.stringify(logs);
     localStorage.setItem(key, serialized);
-    // Also update global default if guest
     if (!userId) {
       localStorage.setItem(GLOBAL_DEFAULT_KEY, serialized);
     }
-    return { success: true };
   } catch (e: any) {
     if (e.name === 'QuotaExceededError' || e.code === 22) {
       return {
         success: false,
-        error: 'El almacenamiento local del navegador está lleno. Elimina registros antiguos o exporta tus datos.',
+        error: 'El almacenamiento local está lleno. Exporta tus datos para liberar espacio.',
       };
     }
-    return {
-      success: false,
-      error: `Error al guardar los datos: ${e.message || 'error desconocido'}`,
-    };
   }
+
+  // Sync to server if authenticated
+  const session = getActiveSession();
+  if (session?.token && userId) {
+    try {
+      fetch('/api/workouts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.token}`,
+        },
+        body: JSON.stringify({ workouts: logs }),
+      }).catch((err) => {
+        console.warn('Background sync to server failed:', err);
+      });
+    } catch {}
+  }
+
+  return { success: true };
 }
 
 // Sanitize log items defensively

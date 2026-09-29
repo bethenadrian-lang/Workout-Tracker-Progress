@@ -1,108 +1,7 @@
-import { AuthUser, AuthSession } from '../types';
+import { AuthSession } from '../types';
 
-const USERS_STORAGE_KEY = 'wt_auth_users';
 const SESSION_STORAGE_KEY = 'wt_auth_session';
 
-// Helper utilities for hex conversion
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-function hexToBytes(hex: string): Uint8Array {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes[i / 2] = parseInt(hex.substring(i, i + 2), 16);
-  }
-  return bytes;
-}
-
-// Generate cryptographically secure random salt
-function generateSalt(): string {
-  if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
-    const bytes = new Uint8Array(16);
-    window.crypto.getRandomValues(bytes);
-    return bytesToHex(bytes);
-  }
-  // Fallback random
-  let s = '';
-  for (let i = 0; i < 32; i++) {
-    s += Math.floor(Math.random() * 16).toString(16);
-  }
-  return s;
-}
-
-// Derive cryptographic hash using PBKDF2 (100,000 iterations, SHA-256)
-async function hashPassword(password: string, saltHex: string): Promise<string> {
-  const enc = new TextEncoder();
-  if (
-    typeof window !== 'undefined' &&
-    window.crypto &&
-    window.crypto.subtle
-  ) {
-    try {
-      const salt = hexToBytes(saltHex);
-      const keyMaterial = await window.crypto.subtle.importKey(
-        'raw',
-        enc.encode(password),
-        { name: 'PBKDF2' },
-        false,
-        ['deriveBits']
-      );
-      const derivedBits = await window.crypto.subtle.deriveBits(
-        {
-          name: 'PBKDF2',
-          salt: salt as any,
-          iterations: 100000,
-          hash: 'SHA-256',
-        },
-        keyMaterial,
-        256
-      );
-      return bytesToHex(new Uint8Array(derivedBits));
-    } catch (e) {
-      console.warn('SubtleCrypto error, falling back to basic hash', e);
-    }
-  }
-
-  // Fallback SHA-256 hash using digest if PBKDF2 not fully supported
-  if (window.crypto && window.crypto.subtle && window.crypto.subtle.digest) {
-    const data = enc.encode(password + saltHex);
-    const hash = await window.crypto.subtle.digest('SHA-256', data);
-    return bytesToHex(new Uint8Array(hash));
-  }
-
-  // Ultra-simple fallback for environments without crypto
-  let h = 0;
-  const str = password + saltHex;
-  for (let i = 0; i < str.length; i++) {
-    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
-  }
-  return Math.abs(h).toString(16).padStart(16, '0');
-}
-
-// Get all registered users from storage
-export function getStoredUsers(): AuthUser[] {
-  try {
-    const raw = localStorage.getItem(USERS_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    console.error('Error reading users from localStorage', e);
-    return [];
-  }
-}
-
-// Save users to storage
-function saveUsers(users: AuthUser[]): void {
-  try {
-    localStorage.setItem(USERS_STORAGE_KEY, JSON.stringify(users));
-  } catch (e) {
-    console.error('Error saving users to localStorage', e);
-  }
-}
-
-// Get current active session
 export function getActiveSession(): AuthSession | null {
   try {
     const raw = localStorage.getItem(SESSION_STORAGE_KEY);
@@ -113,12 +12,11 @@ export function getActiveSession(): AuthSession | null {
       return null;
     }
     return session;
-  } catch (e) {
+  } catch {
     return null;
   }
 }
 
-// Save active session
 export function saveActiveSession(session: AuthSession | null): void {
   try {
     if (session) {
@@ -131,41 +29,28 @@ export function saveActiveSession(session: AuthSession | null): void {
   }
 }
 
-// Input validation helpers
 export function validateEmail(email: string): { valid: boolean; error?: string } {
   const trimmed = email.trim();
   if (!trimmed) {
-    return { valid: false, error: 'El correo electrónico es obligatorio.' };
+    return { valid: false, error: 'Introduce tu correo electrónico.' };
   }
-  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-  if (!emailRegex.test(trimmed)) {
-    return { valid: false, error: 'Introduce un correo electrónico válido (ejemplo: usuario@dominio.com).' };
-  }
-  if (trimmed.length > 100) {
-    return { valid: false, error: 'El correo electrónico no puede superar los 100 caracteres.' };
+  if (!trimmed.includes('@') || !trimmed.includes('.')) {
+    return { valid: false, error: 'Introduce un correo válido (ejemplo: usuario@correo.com).' };
   }
   return { valid: true };
 }
 
 export function validatePassword(password: string): { valid: boolean; error?: string } {
   if (!password) {
-    return { valid: false, error: 'La contraseña es obligatoria.' };
+    return { valid: false, error: 'Introduce una contraseña.' };
   }
-  if (password.length < 6) {
-    return { valid: false, error: 'La contraseña debe tener al menos 6 caracteres.' };
-  }
-  if (password.length > 128) {
-    return { valid: false, error: 'La contraseña no puede superar los 128 caracteres.' };
-  }
-  const hasLetter = /[a-zA-Z]/.test(password);
-  const hasDigit = /[0-9]/.test(password);
-  if (!hasLetter || !hasDigit) {
-    return { valid: false, error: 'La contraseña debe contener al menos una letra y un número.' };
+  if (password.length < 4) {
+    return { valid: false, error: 'La contraseña debe tener al menos 4 caracteres.' };
   }
   return { valid: true };
 }
 
-// Register user
+// Register user via Server API
 export async function registerUser(
   email: string,
   password: string,
@@ -181,47 +66,41 @@ export async function registerUser(
     return { success: false, error: passValidation.error };
   }
 
-  const normalizedEmail = email.trim().toLowerCase();
-  const users = getStoredUsers();
+  try {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: email.trim().toLowerCase(),
+        password,
+        name: name?.trim(),
+      }),
+    });
 
-  const existing = users.find((u) => u.email.toLowerCase() === normalizedEmail);
-  if (existing) {
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return { success: false, error: data.error || 'Error al crear la cuenta.' };
+    }
+
+    const session: AuthSession = {
+      userId: data.user.id,
+      email: data.user.email,
+      name: data.user.name,
+      token: data.token,
+      expiresAt: Date.now() + 60 * 24 * 60 * 60 * 1000,
+    };
+
+    saveActiveSession(session);
+    return { success: true, session };
+  } catch (err: any) {
     return {
       success: false,
-      error: 'Ya existe una cuenta registrada con este correo electrónico.',
+      error: 'No se pudo conectar con el servidor. Revisa tu conexión a internet.',
     };
   }
-
-  const salt = generateSalt();
-  const hash = await hashPassword(password, salt);
-  const displayName = (name && name.trim()) || normalizedEmail.split('@')[0];
-
-  const newUser: AuthUser = {
-    id: 'user_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 7),
-    email: normalizedEmail,
-    name: displayName,
-    salt,
-    hash,
-    createdAt: new Date().toISOString(),
-  };
-
-  users.push(newUser);
-  saveUsers(users);
-
-  // Create session (valid for 30 days)
-  const session: AuthSession = {
-    userId: newUser.id,
-    email: newUser.email,
-    name: newUser.name,
-    token: 'tok_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10),
-    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
-  };
-
-  saveActiveSession(session);
-  return { success: true, session };
 }
 
-// Login user
+// Login user via Server API
 export async function loginUser(
   email: string,
   password: string
@@ -235,38 +114,77 @@ export async function loginUser(
     return { success: false, error: 'Introduce tu contraseña.' };
   }
 
-  const normalizedEmail = email.trim().toLowerCase();
-  const users = getStoredUsers();
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: email.trim().toLowerCase(),
+        password,
+      }),
+    });
 
-  const user = users.find((u) => u.email.toLowerCase() === normalizedEmail);
-  if (!user) {
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return { success: false, error: data.error || 'Error al iniciar sesión.' };
+    }
+
+    const session: AuthSession = {
+      userId: data.user.id,
+      email: data.user.email,
+      name: data.user.name,
+      token: data.token,
+      expiresAt: Date.now() + 60 * 24 * 60 * 60 * 1000,
+    };
+
+    saveActiveSession(session);
+    return { success: true, session };
+  } catch (err: any) {
     return {
       success: false,
-      error: 'No se encontró ninguna cuenta con este correo electrónico.',
+      error: 'No se pudo conectar con el servidor. Revisa tu conexión a internet.',
     };
   }
+}
 
-  const computedHash = await hashPassword(password, user.salt);
-  if (computedHash !== user.hash) {
-    return {
-      success: false,
-      error: 'Contraseña incorrecta. Por favor verifícala e intenta de nuevo.',
+// Quick demo login via Server API
+export async function demoLogin(): Promise<{ success: boolean; session?: AuthSession; error?: string }> {
+  try {
+    const res = await fetch('/api/auth/demo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      return { success: false, error: data.error || 'Error al entrar en cuenta demo.' };
+    }
+    const session: AuthSession = {
+      userId: data.user.id,
+      email: data.user.email,
+      name: data.user.name,
+      token: data.token,
+      expiresAt: Date.now() + 60 * 24 * 60 * 60 * 1000,
     };
+    saveActiveSession(session);
+    return { success: true, session };
+  } catch (err: any) {
+    return { success: false, error: 'Error de conexión con el servidor.' };
   }
-
-  const session: AuthSession = {
-    userId: user.id,
-    email: user.email,
-    name: user.name,
-    token: 'tok_' + Date.now().toString(36) + Math.random().toString(36).substring(2, 10),
-    expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
-  };
-
-  saveActiveSession(session);
-  return { success: true, session };
 }
 
 // Logout user
-export function logoutUser(): void {
+export async function logoutUser(): Promise<void> {
+  const session = getActiveSession();
+  if (session?.token) {
+    try {
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.token}`,
+        },
+      }).catch(() => {});
+    } catch {}
+  }
   saveActiveSession(null);
 }

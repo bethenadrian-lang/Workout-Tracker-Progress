@@ -6,6 +6,7 @@ import { getActiveSession, logoutUser } from './services/auth';
 import {
   loadUserLogs,
   saveUserLogs,
+  syncWorkoutsFromServer,
   validateImportPayload,
 } from './services/storage';
 import { AuthModal } from './components/AuthModal';
@@ -175,110 +176,56 @@ export default function App() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
-  // Workout logs state - per user or guest
+  // Workout logs state - per user or guest (empty by default on first load)
   const [logs, setLogs] = useState<WorkoutLog[]>(() => {
-    const initialSession = getActiveSession();
-    const stored = loadUserLogs(initialSession?.userId);
-    if (stored.length > 0) return stored;
-
-    // Default starter logs
-    const today = new Date();
-    const dMinus = (days: number) => {
-      const d = new Date(today);
-      d.setDate(d.getDate() - days);
-      return fmt(d);
-    };
-
-    return [
-      {
-        id: uid(),
-        userId: initialSession?.userId,
-        date: dMinus(4),
-        ex: 'Sentadilla trasera',
-        kg: 90,
-        sets: 3,
-        reps: 8,
-        rpe: 7,
-        note: 'Buen calentamiento y técnica',
-      },
-      {
-        id: uid(),
-        userId: initialSession?.userId,
-        date: dMinus(4),
-        ex: 'Press banca',
-        kg: 70,
-        sets: 4,
-        reps: 8,
-        rpe: 8,
-        note: 'Pausa de 1s en el pecho',
-      },
-      {
-        id: uid(),
-        userId: initialSession?.userId,
-        date: dMinus(2),
-        ex: 'Sentadilla trasera',
-        kg: 95,
-        sets: 3,
-        reps: 6,
-        rpe: 8,
-        note: 'Subiendo kilos con buena barra',
-      },
-      {
-        id: uid(),
-        userId: initialSession?.userId,
-        date: dMinus(2),
-        ex: 'Dominadas',
-        kg: 0,
-        sets: 4,
-        reps: 8,
-        rpe: 7,
-        note: 'Estrictas al pecho',
-      },
-      {
-        id: uid(),
-        date: fmt(today),
-        userId: initialSession?.userId,
-        ex: 'Sentadilla trasera',
-        kg: 100,
-        sets: 3,
-        reps: 5,
-        rpe: 8,
-        note: '¡Sensaciones excelentes!',
-      },
-      {
-        id: uid(),
-        date: fmt(today),
-        userId: initialSession?.userId,
-        ex: 'Press banca',
-        kg: 75,
-        sets: 3,
-        reps: 6,
-        rpe: 8,
-        note: 'Progresando sólido',
-      },
-    ];
+    try {
+      const initialSession = getActiveSession();
+      const stored = loadUserLogs(initialSession?.userId);
+      // Clean up previous dummy demo entries if they match the old hardcoded seeds
+      const isLegacyDemo =
+        stored.length === 6 &&
+        stored.some((l) => l.note === 'Buen calentamiento y técnica') &&
+        stored.some((l) => l.note === 'Pausa de 1s en el pecho');
+      if (isLegacyDemo) {
+        saveUserLogs([], initialSession?.userId);
+        return [];
+      }
+      return stored;
+    } catch {
+      return [];
+    }
   });
 
-  // When user signs in or switches account
-  const handleAuthSuccess = (newSession: AuthSession) => {
+  // When user signs in or switches account, load and sync only that user's saved progress
+  const handleAuthSuccess = async (newSession: AuthSession) => {
     setSession(newSession);
-    const userLogs = loadUserLogs(newSession.userId);
-    if (userLogs.length > 0) {
-      setLogs(userLogs);
+    const serverLogs = await syncWorkoutsFromServer(newSession.userId);
+    if (serverLogs) {
+      setLogs(serverLogs);
     } else {
-      const updated = logs.map((l) => ({ ...l, userId: newSession.userId }));
-      setLogs(updated);
-      saveUserLogs(updated, newSession.userId);
+      const userLogs = loadUserLogs(newSession.userId);
+      setLogs(userLogs);
     }
     addToast(`¡Sesión iniciada como ${newSession.name}!`, 'success');
   };
+
+  // Sync workouts from server on startup if logged in
+  useEffect(() => {
+    if (session?.userId) {
+      syncWorkoutsFromServer(session.userId).then((serverLogs) => {
+        if (serverLogs) {
+          setLogs(serverLogs);
+        }
+      });
+    }
+  }, [session?.userId]);
 
   const handleLogout = () => {
     logoutUser();
     setSession(null);
     const guestLogs = loadUserLogs(undefined);
     setLogs(guestLogs);
-    addToast('Sesión cerrada correctamente.', 'info');
+    addToast('Sesión cerrada.', 'info');
   };
 
   // Save logs with feedback
@@ -318,7 +265,7 @@ export default function App() {
   // Tab 0: Diario form state & validation errors
   const [fDate, setFDate] = useState<string>(() => fmt(new Date()));
   const [fEx, setFEx] = useState<string>('');
-  const [fKg, setFKg] = useState<string>('60');
+  const [fKg, setFKg] = useState<string>('');
   const [fSets, setFSets] = useState<string>('3');
   const [fReps, setFReps] = useState<string>('8');
   const [fRpe, setFRpe] = useState<number>(7);
@@ -486,9 +433,7 @@ export default function App() {
   }, [logs]);
 
   // Tab 1: Progress & Charts
-  const [selectedEx, setSelectedEx] = useState<Set<string>>(
-    new Set(['Sentadilla trasera'])
-  );
+  const [selectedEx, setSelectedEx] = useState<Set<string>>(new Set());
   const [isMenuOpen, setIsMenuOpen] = useState<boolean>(false);
   const exMenuRef = useRef<HTMLDivElement>(null);
   const exBtnRef = useRef<HTMLButtonElement>(null);
@@ -498,9 +443,13 @@ export default function App() {
   useEffect(() => {
     if (loggedExercises.length > 0) {
       const valid = new Set([...selectedEx].filter((e) => loggedExercises.includes(e)));
-      if (valid.size === 0 && selectedEx.size > 0) {
+      if (valid.size === 0) {
         setSelectedEx(new Set([loggedExercises[0]]));
+      } else {
+        setSelectedEx(valid);
       }
+    } else {
+      setSelectedEx(new Set());
     }
   }, [loggedExercises]);
 
@@ -1032,9 +981,9 @@ export default function App() {
                       setAuthModalMode('register');
                       setAuthModalOpen(true);
                     }}
-                    className="rounded-full border border-slate-300 dark:border-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800 text-xs px-2.5 py-1 transition cursor-pointer hidden sm:inline-block"
+                    className="rounded-full border border-slate-300 dark:border-zinc-700 hover:bg-slate-100 dark:hover:bg-zinc-800 text-xs px-2.5 py-1 transition cursor-pointer font-medium"
                   >
-                    Registrarse
+                    Crear cuenta
                   </button>
                 </div>
               )}
